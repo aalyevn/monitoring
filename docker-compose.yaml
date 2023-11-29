@@ -1,0 +1,157 @@
+version: "3.9"
+
+networks:
+  prom-net:
+    driver: bridge
+
+services:
+  grafana:
+    image: grafana/grafana:9.3.6-ubuntu
+    container_name: grafana
+    restart: always
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/grafana/datasources:/etc/grafana/provisioning/datasources/
+      - ./configs/grafana/dashboards:/etc/grafana/provisioning/dashboards/
+    environment:
+      - GF_SERVER_ROOT_URL=https://grafana.apex-consulting.io/
+
+      - VIRTUAL_HOST=grafana.apex-consulting.io
+      - VIRTUAL_PORT=3000
+      - LETSENCRYPT_HOST=grafana.apex-consulting.io
+      - LETSENCRYPT_EMAIL=admin@apex-consulting.io
+    ports:
+      - 3000:3000
+    depends_on:
+      - prometheus
+    networks:
+      - prom-net
+    logging:
+      driver: syslog
+      options:
+        tag: "docker/grafana"
+
+
+  prometheus:
+    image: prom/prometheus:v2.42.0
+    container_name: prometheus
+    restart: always
+    ports:
+      - 9090:9090
+    # Change 127.0.0.1 to ip address of node where docker satck is deployed     
+    command: 
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus" 
+      - "--web.external-url=https://monitoring.apex-consulting.io"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries" 
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    volumes:
+      - prom-data:/prometheus
+#      - ./configs/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    environment:
+      - VIRTUAL_HOST=monitoring.apex-consulting.io
+      - VIRTUAL_PORT=9090
+      - LETSENCRYPT_HOST=monitoring.apex-consulting.io
+      - LETSENCRYPT_EMAIL=admin@apex-consulting.io
+    networks:
+      - prom-net
+    logging:
+      driver: syslog
+      options:
+        tag: "docker/prometeus"
+
+
+  alertmanager:
+    image: prom/alertmanager:v0.25.0
+    container_name: alertmanager
+    restart: always
+    expose:
+      - 9093
+    # Change 127.0.0.1 to ip address of node where docker satck is deployed 
+    command: 
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager" 
+      - "--web.external-url=http://127.0.0.1:9093"      
+    volumes:
+      - alert-data:/alertmanager
+      - ./configs/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    networks:
+      - prom-net
+    logging:
+      driver: syslog
+      options:
+        tag: "docker/alertmanager"
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    restart: always
+    ports:
+      - "16686:16686"
+      - "14268"
+      - "14250"
+    networks:
+      - prom-net
+
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    restart: always
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml", ""]
+    volumes:
+      - ./configs/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "1888:1888"   # pprof extension
+      - "8888:8888"   # Prometheus metrics exposed by the collector
+      - "8889:8889"   # Prometheus exporter metrics
+      - "13133:13133" # health_check extension
+      - "4317:4317"   # OTLP gRPC receiver
+      - "55679:55679" # zpages extension
+    networks:
+      - prom-net
+    depends_on:
+      - jaeger
+
+  elasticsearch:
+    image: elasticsearch:8.11.1
+    container_name: elasticsearch
+    ports:
+      - 9200:9200
+      - 9300:9300
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    networks:
+      - prom-net
+
+
+  webapp:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: webapi_srv
+    pid: "host"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+    ports:
+      - "7080:7080"
+    depends_on:
+      - otel-collector
+    networks:
+      - prom-net
+
+  kibana:
+    image: kibana:8.11.1
+    ports:
+      - "5601:5601"
+    environment:
+      - 'ELASTICSEARCH_HOSTS=["http://elasticsearch:9200"]'
+    networks:
+      - prom-net
+
+volumes:
+  grafana-data:
+  prom-data:
+  alert-data:

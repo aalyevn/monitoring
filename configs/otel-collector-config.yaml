@@ -1,0 +1,66 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+
+exporters:
+ logging:
+   loglevel: info  
+
+ prometheus:
+   endpoint: "0.0.0.0:8889"
+   const_labels:
+     label1: value1
+
+ debug:
+
+ otlp:
+   endpoint: jaeger:4317
+   tls:
+     insecure: true
+
+ elasticsearch/trace:
+   endpoints: [http://elasticsearch:9200]
+   traces_index: trace_index
+ elasticsearch/log:
+   endpoints: [http://elasticsearch:9200]
+   logs_index: my_log_index
+   sending_queue:
+     enabled: true
+     num_consumers: 20
+     queue_size: 1000
+
+
+# elasticsearch:
+#   endpoints: [http://elasticsearch:9200]
+#   user: elastic
+#   password: 
+#   api_key: 
+#   tls:
+#     insecure_skip_verify: true
+
+processors:
+  batch:
+
+extensions:
+  health_check:
+  pprof:
+    endpoint: :1888
+  zpages:
+    endpoint: :55679
+
+service:
+  extensions: [pprof, zpages, health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlp, elasticsearch/trace]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [elasticsearch/log]
